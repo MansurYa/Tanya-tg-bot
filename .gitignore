@@ -1,0 +1,22 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Data
+*.csv
+*.db
+*.txt
+*.ipynb
+
+# Config
+config.json
+
+# OS specific
+.DS_Store
+
+# chat
+chat_history.txt
+mansur_wakeup_times.csv
+processed_chat_2_full.txt
+processed_chat_full.txt
