@@ -336,6 +336,7 @@ async def show_main_menu(update: Update, context: CallbackContext):
     keyboard = [
         [InlineKeyboardButton("😢 Мне грустно", callback_data="support_sad")],
         [InlineKeyboardButton("🤗 Хочу на ручки", callback_data="support_hug")],
+        [InlineKeyboardButton("💌 Утреннее сообщение", callback_data="another_message")],
     ]
 
     message_text = "🏠 Главное меню\n\nВыбери, что тебе нужно:"
