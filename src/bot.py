@@ -703,6 +703,10 @@ async def setup_scheduler(app: Application):
     scheduler.start()
     logger.info("Планировщик запущен (notifications + morning messages).")
 
+    # Reschedule pending messages on startup
+    await schedule_morning_messages(app.bot)
+    logger.info("Проверка и планирование отложенных сообщений завершена.")
+
 
 def main():
     """Основная функция, настраивающая и запускающая бота."""
