@@ -1,14 +1,10 @@
-# ============ Импорты ============
-
-# Стандартные библиотеки
 import json
 import logging
 import os
 import random
+import numpy as np
 from datetime import date, datetime, time, timedelta
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
-
-# Сторонние библиотеки
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from openai import AsyncOpenAI
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -21,21 +17,18 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
-
-# Модули текущего проекта
 from . import database
 from .database import create_user, get_user, get_users_for_notification, update_user
+from .message_pool import MessagePool, load_compliments, load_psychology, format_combined_message
 
 if TYPE_CHECKING:
     from telegram.ext import Application
 
-# ============ Логирование и окружение ============
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.DEBUG
 )
 logger = logging.getLogger(__name__)
 
-# ============ Загрузка Конфига ============
 try:
     with open("config.json", "r", encoding="utf-8") as f:
         CONFIG = json.load(f)
@@ -43,7 +36,6 @@ except FileNotFoundError:
     logger.critical("КРИТИЧЕСКАЯ ОШИБКА: config.json не найден! Бот не может запуститься.")
     exit()
 
-# ============ Клиент OpenRouter (Асинхронный) ============
 client = AsyncOpenAI(
     api_key=CONFIG["settings"].get("openrouter_api_key"),
     base_url="https://openrouter.ai/api/v1",
@@ -53,19 +45,22 @@ client = AsyncOpenAI(
     },
 )
 
-# ============ Константы ============
 QUEST_Q1, QUEST_Q2, COMPLETED = range(3)
 UNLOCK_SEQUENCE = CONFIG["settings"]["unlock_sequence"]
 
+# Initialize message pools
+try:
+    emotional_pool = MessagePool("emotional", load_compliments())
+    psychological_pool = MessagePool("psychological", load_psychology())
+    logger.info(f"Message pools loaded: {emotional_pool.total_count} compliments, {psychological_pool.total_count} psychology")
+except Exception as e:
+    logger.error(f"Failed to load message pools: {e}")
+    emotional_pool = None
+    psychological_pool = None
 
-# ============ Вспомогательные функции ============
 
 def get_current_gift(user: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """
-    Получает текущий подарок для пользователя на основе его прогресса в квесте.
-    :param user: Словарь с данными пользователя из базы данных.
-    :return: Словарь с данными о текущем подарке или None, если все подарки открыты.
-    """
+    """Получает текущий подарок для пользователя."""
     if user["current_gift_idx"] >= len(UNLOCK_SEQUENCE):
         return None
     gift_id = UNLOCK_SEQUENCE[user["current_gift_idx"]]
@@ -73,11 +68,7 @@ def get_current_gift(user: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 def get_current_question(user: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """
-    Получает текущий вопрос для пользователя.
-    :param user: Словарь с данными пользователя.
-    :return: Словарь с данными о текущем вопросе или None, если подарок не найден.
-    """
+    """Получает текущий вопрос для пользователя."""
     gift = get_current_gift(user)
     if not gift:
         return None
@@ -129,15 +120,9 @@ async def validate_answer(question: Dict[str, Any], user_input: str) -> bool:
         return False
 
 
-# ============ Handlers Квеста (FSM) ============
-
 async def start(update: Update, context: CallbackContext) -> int:
     """
-    Начинает или перезапускает квест для пользователя.
-    Это входная точка для ConversationHandler.
-    :param update: Объект Update от Telegram.
-    :param context: Контекст бота.
-    :return: Следующее состояние FSM (QUEST_Q1 или COMPLETED).
+    Начинает или перезапускает квест. Входная точка ConversationHandler.
     """
     user_id = update.effective_user.id
     user = get_user(user_id)
@@ -183,12 +168,7 @@ async def start(update: Update, context: CallbackContext) -> int:
 
 
 async def handle_answer_q1(update: Update, context: CallbackContext) -> int:
-    """
-    Обрабатывает текстовый ответ пользователя на первый вопрос подарка.
-    :param update: Объект Update от Telegram.
-    :param context: Контекст бота.
-    :return: Следующее состояние FSM (QUEST_Q2 или QUEST_Q1).
-    """
+    """Обрабатывает ответ на первый вопрос."""
     user_id = update.effective_user.id
     user = get_user(user_id)
     user_input = update.message.text
@@ -222,12 +202,7 @@ async def handle_answer_q1(update: Update, context: CallbackContext) -> int:
 
 
 async def handle_answer_q2(update: Update, context: CallbackContext) -> int:
-    """
-    Обрабатывает текстовый ответ пользователя на второй вопрос подарка.
-    :param update: Объект Update от Telegram.
-    :param context: Контекст бота.
-    :return: Следующее состояние FSM.
-    """
+    """Обрабатывает ответ на второй вопрос."""
     user_id = update.effective_user.id
     user_input = update.message.text
 
@@ -246,12 +221,7 @@ async def handle_answer_q2(update: Update, context: CallbackContext) -> int:
 
 
 async def skip(update: Update, context: CallbackContext) -> int:
-    """
-    Обрабатывает команду /skip для пропуска текущего вопроса.
-    :param update: Объект Update от Telegram.
-    :param context: Контекст бота.
-    :return: Следующее состояние FSM.
-    """
+    """Обрабатывает команду /skip."""
     user_id = update.effective_user.id
     user = get_user(user_id)
 
@@ -283,11 +253,7 @@ async def skip(update: Update, context: CallbackContext) -> int:
 
 
 async def handle_get_hint(update: Update, context: CallbackContext):
-    """
-    Обрабатывает нажатие на inline-кнопку для получения подсказки.
-    :param update: Объект Update от Telegram.
-    :param context: Контекст бота.
-    """
+    """Обрабатывает нажатие кнопки 'Взять подсказку'."""
     query = update.callback_query
     await query.answer()
 
@@ -305,13 +271,13 @@ async def handle_get_hint(update: Update, context: CallbackContext):
         new_text = f"{query.message.text}\n\n💡 Подсказка: {hint_text}"
         await query.edit_message_text(text=new_text, reply_markup=None)
     else:
-        await query.edit_message_text(text=f"{query.message.text}\n\n(К этому вопросу подсказки нет)",
-                                      reply_markup=None)
+        new_text = f"{query.message.text}\n\n(К этому вопросу подсказки нет)"
+        await query.edit_message_text(text=new_text, reply_markup=None)
 
 
 async def unlock_gift_and_proceed(update: Update, user_id: int, skipped: bool = False) -> int:
     """
-    "Открывает" подарок, обновляет прогресс пользователя и переходит к следующему вопросу.
+    Открывает подарок, обновляет прогресс и переходит к следующему вопросу.
     :param update: Объект Update от Telegram.
     :param user_id: ID пользователя.
     :param skipped: True, если вопрос был пропущен.
@@ -341,6 +307,10 @@ async def unlock_gift_and_proceed(update: Update, user_id: int, skipped: bool = 
             "🎉🎉🎉 ПОЗДРАВЛЯЮ! ВСЕ 12 ПОДАРКОВ ОТКРЫТЫ! 🎉🎉🎉\n\n"
             "Теперь тебе доступно меню поддержки и другие секреты. 💕"
         )
+
+        # Activate morning messages
+        await activate_morning_messages(update, user_id)
+
         await show_main_menu(update, None)
         return COMPLETED
     else:
@@ -361,18 +331,11 @@ async def unlock_gift_and_proceed(update: Update, user_id: int, skipped: bool = 
         return QUEST_Q1
 
 
-# ============ Handlers Пост-Квеста ============
-
 async def show_main_menu(update: Update, context: CallbackContext):
-    """
-    Показывает главное меню с кнопками поддержки после завершения квеста.
-    :param update: Объект Update от Telegram.
-    :param context: Контекст бота.
-    """
+    """Показывает главное меню с кнопками поддержки."""
     keyboard = [
         [InlineKeyboardButton("😢 Мне грустно", callback_data="support_sad")],
         [InlineKeyboardButton("🤗 Хочу на ручки", callback_data="support_hug")],
-        [InlineKeyboardButton("💕 Напомни, что я твоя", callback_data="support_yours")],
     ]
 
     message_text = "🏠 Главное меню\n\nВыбери, что тебе нужно:"
@@ -390,11 +353,7 @@ async def show_main_menu(update: Update, context: CallbackContext):
 
 
 async def handle_support_callback(update: Update, context: CallbackContext):
-    """
-    Обрабатывает нажатия на кнопки в меню поддержки.
-    :param update: Объект Update от Telegram.
-    :param context: Контекст бота.
-    """
+    """Обрабатывает нажатия на кнопки в меню поддержки."""
     query = update.callback_query
     await query.answer()
 
@@ -408,11 +367,6 @@ async def handle_support_callback(update: Update, context: CallbackContext):
             "*крепко-крепко обнимает* Ты моя самая сладкая девочка 🫂",
             "Представь, что я рядом, целую тебя в макушку и глажу по голове 💕",
             "Хочу сейчас же оказаться рядом и заключить тебя в объятия.",
-        ],
-        "support_yours": [
-            "Ты моя собственность. Только моя. Не забывай об этом никогда. 🔐",
-            "Ты принадлежишь мне. Полностью. Без остатка. И я обожаю это. ❤️‍🔥",
-            "Каждая твоя мысль, каждое движение — всё принадлежит мне. Ты — моя.",
         ],
     }
 
@@ -431,11 +385,7 @@ async def handle_support_callback(update: Update, context: CallbackContext):
 
 
 async def handle_webapp_data(update: Update, context: CallbackContext):
-    """
-    Обрабатывает данные, полученные от Telegram Mini App.
-    :param update: Объект Update от Telegram.
-    :param context: Контекст бота.
-    """
+    """Обрабатывает данные от Telegram Mini App."""
     try:
         data = json.loads(update.message.web_app_data.data)
         logger.info(f"Получены данные из Mini App: {data}")
@@ -449,17 +399,236 @@ async def handle_webapp_data(update: Update, context: CallbackContext):
         await update.message.reply_text("Произошла ошибка при обработке данных от веб-приложения.")
 
 
-# ============ Планировщик (APScheduler) ============
+async def restore_state(update: Update, context: CallbackContext) -> int:
+    """
+    Восстанавливает состояние пользователя из БД при перезапуске бота.
+    """
+    user_id = update.effective_user.id
+    user = get_user(user_id)
+
+    if not user:
+        return await start(update, context)
+
+    if user["state"] == "COMPLETED":
+        await show_main_menu(update, context)
+        return COMPLETED
+
+    q_idx = user.get("current_question", 1)
+    if q_idx == 1:
+        return await handle_answer_q1(update, context)
+    elif q_idx == 2:
+        return await handle_answer_q2(update, context)
+    
+    return await start(update, context)
+
 
 scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
 
 
+async def activate_morning_messages(update: Update, user_id: int):
+    """Activate morning messages and send first one immediately."""
+    if not emotional_pool or not psychological_pool:
+        logger.error("Cannot activate morning messages: pools not loaded")
+        return
+
+    # Enable morning messages
+    update_user(user_id, morning_messages_enabled=1)
+    logger.info(f"Morning messages activated for user {user_id}")
+
+    # Send first message immediately
+    await send_morning_message(update.get_bot(), user_id, is_first=True)
+
+
+async def send_morning_message(bot, user_id: int, is_first: bool = False):
+    """Send morning message to user."""
+    try:
+        user = get_user(user_id)
+        if not user or not user.get('morning_messages_enabled'):
+            return
+
+        # Get shown IDs from database
+        emotional_shown = json.loads(user.get('emotional_pool_shown_ids', '[]'))
+        psychological_shown = json.loads(user.get('psychological_pool_shown_ids', '[]'))
+
+        # Get next messages
+        emotional_msg, new_emotional_shown = emotional_pool.get_next(emotional_shown)
+        psychological_msg, new_psychological_shown = psychological_pool.get_next(psychological_shown)
+
+        # Format combined message
+        combined_text = format_combined_message(
+            emotional_msg["text"],
+            psychological_msg["text"]
+        )
+
+        # Create keyboard with "Another message" button
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Ещё одно сообщение", callback_data="another_message")]
+        ])
+
+        # Send message
+        await bot.send_message(
+            chat_id=user_id,
+            text=combined_text,
+            reply_markup=keyboard
+        )
+
+        # Update database
+        today = date.today().isoformat()
+        update_user(
+            user_id,
+            emotional_pool_shown_ids=json.dumps(new_emotional_shown),
+            psychological_pool_shown_ids=json.dumps(new_psychological_shown),
+            last_morning_message_date=today,
+            next_morning_message_time=None
+        )
+
+        logger.info(f"Morning message sent to user {user_id} (emotional: {len(new_emotional_shown)}/{emotional_pool.total_count}, psych: {len(new_psychological_shown)}/{psychological_pool.total_count})")
+
+    except Exception as e:
+        logger.error(f"Failed to send morning message to {user_id}: {e}", exc_info=True)
+        # Try to send fallback message
+        try:
+            await bot.send_message(
+                chat_id=user_id,
+                text="Доброе утро! ❤️ (Произошла техническая ошибка, но я всё равно думаю о тебе)"
+            )
+        except:
+            logger.critical(f"Cannot reach user {user_id} at all")
+
+
+async def handle_another_message(update: Update, context: CallbackContext):
+    """Handle 'Another message' button click."""
+    query = update.callback_query
+    await query.answer()
+
+    user_id = query.from_user.id
+    user = get_user(user_id)
+
+    if not user or not user.get('morning_messages_enabled'):
+        await query.answer("Сначала завершите квест!", show_alert=True)
+        return
+
+    if not emotional_pool or not psychological_pool:
+        await query.answer("Сообщения временно недоступны", show_alert=True)
+        return
+
+    try:
+        # Get shown IDs
+        emotional_shown = json.loads(user.get('emotional_pool_shown_ids', '[]'))
+        psychological_shown = json.loads(user.get('psychological_pool_shown_ids', '[]'))
+
+        # Get next messages
+        emotional_msg, new_emotional_shown = emotional_pool.get_next(emotional_shown)
+        psychological_msg, new_psychological_shown = psychological_pool.get_next(psychological_shown)
+
+        # Format message
+        combined_text = format_combined_message(
+            emotional_msg["text"],
+            psychological_msg["text"]
+        )
+
+        # Create keyboard
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Ещё одно сообщение", callback_data="another_message")]
+        ])
+
+        # Send new message (not edit, send new)
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=combined_text,
+            reply_markup=keyboard
+        )
+
+        # Update database
+        update_user(
+            user_id,
+            emotional_pool_shown_ids=json.dumps(new_emotional_shown),
+            psychological_pool_shown_ids=json.dumps(new_psychological_shown)
+        )
+
+        logger.info(f"Another message sent to user {user_id}")
+
+    except Exception as e:
+        logger.error(f"Failed to send another message to {user_id}: {e}")
+        await query.answer("Произошла ошибка", show_alert=True)
+
+
+def generate_morning_time() -> datetime:
+    """Generate random morning message time with normal distribution."""
+    # Mean: 09:45 Moscow time
+    # Std: 67.18 minutes
+    mean_minutes = 9 * 60 + 45  # 585 minutes from midnight
+    std_minutes = 67.18
+
+    # Generate random offset
+    offset_minutes = np.random.normal(0, std_minutes)
+
+    # Calculate time
+    total_minutes = mean_minutes + offset_minutes
+
+    # Clamp to reasonable range (7:30 - 12:00)
+    total_minutes = max(7.5 * 60, min(12 * 60, total_minutes))
+
+    hours = int(total_minutes // 60)
+    minutes = int(total_minutes % 60)
+
+    # Create datetime for tomorrow
+    tomorrow = date.today() + timedelta(days=1)
+    send_time = datetime.combine(tomorrow, time(hour=hours, minute=minutes))
+
+    logger.debug(f"Generated morning time: {send_time.strftime('%H:%M')}")
+
+    return send_time
+
+
+async def schedule_morning_messages(bot):
+    """Schedule morning messages for all active users."""
+    try:
+        with database.get_db() as conn:
+            rows = conn.execute("""
+                SELECT telegram_id, last_morning_message_date
+                FROM users
+                WHERE morning_messages_enabled = 1
+            """).fetchall()
+
+        today = date.today().isoformat()
+        scheduled_count = 0
+
+        for row in rows:
+            user_id = row['telegram_id']
+            last_date = row['last_morning_message_date']
+
+            # Skip if already sent today
+            if last_date == today:
+                continue
+
+            # Generate time
+            send_time = generate_morning_time()
+
+            # Schedule job
+            scheduler.add_job(
+                send_morning_message,
+                'date',
+                run_date=send_time,
+                args=[bot, user_id],
+                id=f'morning_msg_{user_id}_{today}',
+                replace_existing=True
+            )
+
+            # Save time to database
+            update_user(user_id, next_morning_message_time=send_time.strftime("%H:%M"))
+
+            scheduled_count += 1
+            logger.info(f"Scheduled morning message for user {user_id} at {send_time.strftime('%H:%M')}")
+
+        logger.info(f"Scheduled {scheduled_count} morning messages")
+
+    except Exception as e:
+        logger.error(f"Failed to schedule morning messages: {e}", exc_info=True)
+
+
 def get_random_morning_time() -> time:
-    """
-    Генерирует случайное время для утреннего уведомления.
-    Использует Гауссово распределение со средним в 11:00 и стандартным отклонением 90 минут.
-    :return: Объект time.
-    """
+    """Генерирует случайное время для утреннего уведомления."""
     mean_minutes = 11 * 60
     std_minutes = 90
 
@@ -473,11 +642,7 @@ def get_random_morning_time() -> time:
 
 
 async def send_single_notification(bot, telegram_id: int):
-    """
-    Отправляет одно утреннее уведомление конкретному пользователю.
-    :param bot: Экземпляр бота.
-    :param telegram_id: ID пользователя в Telegram.
-    """
+    """Отправляет одно утреннее уведомление пользователю."""
     messages = CONFIG.get("notifications", {}).get("morning_messages", [
         "Доброе утро, моя хорошая ☀️",
         "Привет, сладкая. Как спалось? 🌙",
@@ -493,10 +658,7 @@ async def send_single_notification(bot, telegram_id: int):
 
 
 async def schedule_daily_notifications(bot):
-    """
-    Планирует ежедневную отправку уведомлений всем подходящим пользователям.
-    :param bot: Экземпляр бота.
-    """
+    """Планирует ежедневную отправку уведомлений всем подходящим пользователям."""
     today_str = date.today().isoformat()
     users = get_users_for_notification()
 
@@ -518,10 +680,8 @@ async def schedule_daily_notifications(bot):
 
 
 async def setup_scheduler(app: Application):
-    """
-    Настраивает и запускает планировщик задач.
-    :param app: Экземпляр `telegram.ext.Application`.
-    """
+    """Настраивает и запускает планировщик задач."""
+    # Daily notifications (old system)
     scheduler.add_job(
         schedule_daily_notifications,
         'cron',
@@ -529,11 +689,19 @@ async def setup_scheduler(app: Application):
         minute=0,
         args=[app.bot]
     )
+
+    # Morning messages scheduling (new system)
+    scheduler.add_job(
+        schedule_morning_messages,
+        'cron',
+        hour=0,
+        minute=5,
+        args=[app.bot]
+    )
+
     scheduler.start()
-    logger.info("Планировщик запущен.")
+    logger.info("Планировщик запущен (notifications + morning messages).")
 
-
-# ============ Главная функция ============
 
 def main():
     """Основная функция, настраивающая и запускающая бота."""
@@ -547,7 +715,10 @@ def main():
     app = Application.builder().token(token).post_init(setup_scheduler).concurrent_updates(False).build()
 
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
+        entry_points=[
+            CommandHandler("start", start),
+            MessageHandler(filters.TEXT & ~filters.COMMAND, restore_state),
+        ],
         states={
             QUEST_Q1: [
                 CallbackQueryHandler(handle_get_hint, pattern="^get_hint$"),
@@ -561,6 +732,7 @@ def main():
             ],
             COMPLETED: [
                 CallbackQueryHandler(handle_support_callback, pattern="^support_|^main_menu$"),
+                CallbackQueryHandler(handle_another_message, pattern="^another_message$"),
                 MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_webapp_data),
                 CommandHandler("start", start),  # Чтобы можно было снова вызвать меню
             ],
