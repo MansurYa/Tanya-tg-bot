@@ -11,14 +11,41 @@ __pycache__/
 
 # Config
 config.json
+*.env
+.env
+
+# IDE
+.idea/
+.vscode/
+
+# API keys and credentials
+*api_key*
+*token*
+*secret*
 
 # OS specific
 .DS_Store
 
-# chat
+# chat and analysis files (preserved locally)
 chat_history.txt
 mansur_wakeup_times.csv
+tanya_wakeup_times.csv
 processed_chat_2_full.txt
 processed_chat_full.txt
+analysis.ipynb
 temp_work/
 TO-DO.txt
+CONTEXT.md
+
+# Logs
+*.log
+
+# Dataset generator intermediate files
+tanya_dataset_generator/output/
+tanya_dataset_generator/stages/
+tanya_dataset_generator/utils/
+tanya_dataset_generator/*.log
+
+# Node modules
+node_modules/
+safe-space/node_modules/

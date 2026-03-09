@@ -7,10 +7,7 @@ from typing import Optional, Dict, Any, List
 DB_PATH = "data.db"
 
 def init_db():
-    """
-    Инициализирует базу данных.
-    Создает таблицу 'users', если она не существует.
-    """
+    """Инициализирует БД и создает таблицу 'users', если ее нет."""
     with get_db() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
@@ -22,17 +19,20 @@ def init_db():
                 unlocked_gifts TEXT DEFAULT '[]',
                 notifications_enabled INTEGER DEFAULT 1,
                 last_notification_date TEXT,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                morning_messages_enabled INTEGER DEFAULT 0,
+                emotional_pool_shown_ids TEXT DEFAULT '[]',
+                psychological_pool_shown_ids TEXT DEFAULT '[]',
+                emotional_cycle_number INTEGER DEFAULT 1,
+                psychological_cycle_number INTEGER DEFAULT 1,
+                last_morning_message_date TEXT,
+                next_morning_message_time TEXT
             )
         """)
 
 @contextmanager
 def get_db():
-    """
-    Контекстный менеджер для безопасного соединения с базой данных.
-    Гарантирует, что соединение будет закрыто после использования.
-    :return: Объект соединения с базой данных.
-    """
+    """Контекстный менеджер для безопасного соединения с БД."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     try:
@@ -61,7 +61,6 @@ def get_user(telegram_id: int) -> Optional[Dict[str, Any]]:
 def create_user(telegram_id: int, initial_skips: int) -> Dict[str, Any]:
     """
     Создает нового пользователя в базе данных.
-    Если пользователь уже существует, ничего не делает.
     :param telegram_id: Уникальный идентификатор пользователя в Telegram.
     :param initial_skips: Начальное количество пропусков вопросов.
     :return: Словарь с данными созданного или существующего пользователя.
@@ -75,9 +74,9 @@ def create_user(telegram_id: int, initial_skips: int) -> Dict[str, Any]:
 
 def update_user(telegram_id: int, **fields: Any):
     """
-    Обновляет одно или несколько полей для указанного пользователя.
+    Обновляет указанные поля для пользователя.
     :param telegram_id: Идентификатор пользователя для обновления.
-    :param fields: Именованные аргументы, где ключ - это имя столбца, а значение - новое значение.
+    :param fields: Поля для обновления в виде `ключ=значение`.
     """
     if 'unlocked_gifts' in fields:
         fields['unlocked_gifts'] = json.dumps(fields['unlocked_gifts'])
@@ -93,9 +92,7 @@ def update_user(telegram_id: int, **fields: Any):
 
 def get_users_for_notification() -> List[Dict[str, Any]]:
     """
-    Возвращает список пользователей, которым нужно отправить утреннее уведомление.
-    Это пользователи, которые завершили квест, у которых включены уведомления
-    и которые не получали уведомление сегодня.
+    Возвращает пользователей для отправки утреннего уведомления.
     :return: Список словарей с данными пользователей.
     """
     today = date.today().isoformat()

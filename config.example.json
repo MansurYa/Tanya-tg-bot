@@ -1,0 +1,34 @@
+{
+  "meta": {
+    "project": "Tanya present bot",
+    "total_gifts": 12,
+    "questions_per_gift": 2
+  },
+  "settings": {
+    "bot_token": "YOUR_BOT_TOKEN_HERE",
+    "openrouter_api_key": "YOUR_OPENROUTER_API_KEY_HERE",
+    "unlock_sequence": [12, 6, 1, 3, 4, 11, 7, 8, 2, 10, 9, 5],
+    "allowed_skips": 24,
+    "hints_enabled": true,
+    "llm": {
+      "validation_model": "openai/gpt-oss-120b",
+      "validation_temperature": 0.0,
+      "max_tokens": 2000
+    }
+  },
+  "quests": {
+    "12": {
+      "title": "Quest 1",
+      "difficulty": "Easy",
+      "questions": [
+        {
+          "id": "12_1",
+          "text": "Question text here",
+          "user_hint": "Hint text here",
+          "valid_answers": ["answer1", "answer2"],
+          "llm_validation_instruction": "Validation instruction here"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,28 @@
+[
+  {
+    "id": "upg_napkins",
+    "name": "Влажные салфетки",
+    "cost": 250,
+    "currency": "kusi",
+    "effect": "multiplier",
+    "value": 2.0,
+    "target_id": "item_pizza",
+    "req_item_id": "item_pizza",
+    "description": "Чтобы не пачкать клавиатуру жиром. Пицца становится в 2 раза эффективнее.",
+    "image_id": "item_pizza" 
+  },
+  {
+    "id": "upg_cream_bed",
+    "name": "Лежанка Крема",
+    "cost": 5000,
+    "currency": "kusi",
+    "effect": "synergy",
+    "value": 0.1,
+    "target_id": "item_cat_cream",
+    "req_item_id": "item_cat_cream",
+    "description": "Персональное место для рыжего. Коты работают на 10% лучше.",
+    "image_id": "item_cat_bed",
+    "visual_replaces": ["item_cat_cream"],
+    "visual_pos": { "x": 53.0, "y": 86.5, "scale": 0.20 }
+  }
+]

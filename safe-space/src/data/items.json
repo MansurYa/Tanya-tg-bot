@@ -1,0 +1,42 @@
+[
+  {
+    "id": "item_pizza",
+    "name": "Коробка с пиццей",
+    "tier": 1,
+    "base_cost": 15,
+    "base_income": 0.5,
+    "growth_factor": 1.15,
+    "category": "food",
+    "image_id": "item_pizza",
+    "on_buy_trigger": "trig_pizza_first",
+    "description": "Пепперони. Стратегический запас калорий для ночного кодинга.",
+    "visual_pos": { "x": 25.5, "y": 80.5, "scale": 0.13 }
+  },
+  {
+    "id": "item_cat_cream",
+    "name": "Кот Крем",
+    "tier": 2,
+    "base_cost": 1100,
+    "base_income": 12,
+    "growth_factor": 1.15,
+    "category": "living",
+    "image_id": "item_cat_cream",
+    "on_buy_trigger": "trig_cat_welcome",
+    "description": "Рыжий, наглый, твой. Генерирует уют и шерсть.",
+    "visual_pos": { "x": 55.0, "y": 87.5, "scale": 0.14 }
+  },
+  {
+    "id": "item_coffee_machine",
+    "name": "Кофемашина",
+    "tier": 2.5,
+    "base_cost": 25000,
+    "base_income": 150,
+    "growth_factor": 1.15,
+    "category": "tech",
+    "image_id": "item_coffee_machine",
+    "req_item_id": "item_pizza",
+    "on_buy_trigger": "trig_coffee_buzz",
+    "description": "Теперь Мансур не спит. Вообще. Топливо для кода.",
+    "visual_pos": { "x": 65.5, "y": 66.5, "scale": 0.11 }
+  }
+]

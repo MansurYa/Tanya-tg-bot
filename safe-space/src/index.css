@@ -1,0 +1,11 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Сразу добавим базовый стиль, чтобы глаза не болели */
+body {
+  @apply bg-void text-white font-sans overflow-hidden;
+  margin: 0;
+  padding: 0;
+  user-select: none; /* Чтобы Таня не выделяла текст случайно при кликах */
+}
