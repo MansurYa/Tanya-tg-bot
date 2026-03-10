@@ -457,17 +457,42 @@ async def activate_morning_messages(update: Update, user_id: int):
 async def send_morning_message(bot, user_id: int, is_first: bool = False):
     """Send morning message to user."""
     try:
-        user = get_user(user_id)
-        if not user or not user.get('morning_messages_enabled'):
-            return
+        # ATOMIC OPERATION: Read-select-write with database lock
+        with database.get_db() as conn:
+            # Lock the row for this user (prevents concurrent modifications)
+            row = conn.execute(
+                "SELECT * FROM users WHERE telegram_id = ? AND morning_messages_enabled = 1",
+                (user_id,)
+            ).fetchone()
 
-        # Get shown IDs from database
-        emotional_shown = json.loads(user.get('emotional_pool_shown_ids', '[]'))
-        psychological_shown = json.loads(user.get('psychological_pool_shown_ids', '[]'))
+            if not row:
+                return
 
-        # Get next messages
-        emotional_msg, new_emotional_shown = emotional_pool.get_next(emotional_shown)
-        psychological_msg, new_psychological_shown = psychological_pool.get_next(psychological_shown)
+            user = dict(row)
+
+            # Get shown IDs from database
+            emotional_shown = json.loads(user.get('emotional_pool_shown_ids', '[]'))
+            psychological_shown = json.loads(user.get('psychological_pool_shown_ids', '[]'))
+
+            # Get next messages
+            emotional_msg, new_emotional_shown = emotional_pool.get_next(emotional_shown)
+            psychological_msg, new_psychological_shown = psychological_pool.get_next(psychological_shown)
+
+            # Update database BEFORE sending (ensures atomicity)
+            today = date.today().isoformat()
+            conn.execute(
+                """UPDATE users
+                   SET emotional_pool_shown_ids = ?,
+                       psychological_pool_shown_ids = ?,
+                       last_morning_message_date = ?,
+                       next_morning_message_time = NULL
+                   WHERE telegram_id = ?""",
+                (json.dumps(new_emotional_shown),
+                 json.dumps(new_psychological_shown),
+                 today,
+                 user_id)
+            )
+            conn.commit()
 
         # Format combined message
         combined_text = format_combined_message(
@@ -480,21 +505,11 @@ async def send_morning_message(bot, user_id: int, is_first: bool = False):
             [InlineKeyboardButton("Ещё одно сообщение", callback_data="another_message")]
         ])
 
-        # Send message
+        # Send message (outside transaction to avoid blocking)
         await bot.send_message(
             chat_id=user_id,
             text=combined_text,
             reply_markup=keyboard
-        )
-
-        # Update database
-        today = date.today().isoformat()
-        update_user(
-            user_id,
-            emotional_pool_shown_ids=json.dumps(new_emotional_shown),
-            psychological_pool_shown_ids=json.dumps(new_psychological_shown),
-            last_morning_message_date=today,
-            next_morning_message_time=None
         )
 
         logger.info(f"Morning message sent to user {user_id} (emotional: {len(new_emotional_shown)}/{emotional_pool.total_count}, psych: {len(new_psychological_shown)}/{psychological_pool.total_count})")
@@ -517,24 +532,44 @@ async def handle_another_message(update: Update, context: CallbackContext):
     await query.answer()
 
     user_id = query.from_user.id
-    user = get_user(user_id)
-
-    if not user or not user.get('morning_messages_enabled'):
-        await query.answer("Сначала завершите квест!", show_alert=True)
-        return
 
     if not emotional_pool or not psychological_pool:
         await query.answer("Сообщения временно недоступны", show_alert=True)
         return
 
     try:
-        # Get shown IDs
-        emotional_shown = json.loads(user.get('emotional_pool_shown_ids', '[]'))
-        psychological_shown = json.loads(user.get('psychological_pool_shown_ids', '[]'))
+        # ATOMIC OPERATION: Read-select-write with database lock
+        with database.get_db() as conn:
+            row = conn.execute(
+                "SELECT * FROM users WHERE telegram_id = ? AND morning_messages_enabled = 1",
+                (user_id,)
+            ).fetchone()
 
-        # Get next messages
-        emotional_msg, new_emotional_shown = emotional_pool.get_next(emotional_shown)
-        psychological_msg, new_psychological_shown = psychological_pool.get_next(psychological_shown)
+            if not row:
+                await query.answer("Сначала завершите квест!", show_alert=True)
+                return
+
+            user = dict(row)
+
+            # Get shown IDs
+            emotional_shown = json.loads(user.get('emotional_pool_shown_ids', '[]'))
+            psychological_shown = json.loads(user.get('psychological_pool_shown_ids', '[]'))
+
+            # Get next messages
+            emotional_msg, new_emotional_shown = emotional_pool.get_next(emotional_shown)
+            psychological_msg, new_psychological_shown = psychological_pool.get_next(psychological_shown)
+
+            # Update database BEFORE sending
+            conn.execute(
+                """UPDATE users
+                   SET emotional_pool_shown_ids = ?,
+                       psychological_pool_shown_ids = ?
+                   WHERE telegram_id = ?""",
+                (json.dumps(new_emotional_shown),
+                 json.dumps(new_psychological_shown),
+                 user_id)
+            )
+            conn.commit()
 
         # Format message
         combined_text = format_combined_message(
@@ -552,13 +587,6 @@ async def handle_another_message(update: Update, context: CallbackContext):
             chat_id=user_id,
             text=combined_text,
             reply_markup=keyboard
-        )
-
-        # Update database
-        update_user(
-            user_id,
-            emotional_pool_shown_ids=json.dumps(new_emotional_shown),
-            psychological_pool_shown_ids=json.dumps(new_psychological_shown)
         )
 
         logger.info(f"Another message sent to user {user_id}")
@@ -626,7 +654,7 @@ async def schedule_morning_messages(bot):
                 'date',
                 run_date=send_time,
                 args=[bot, user_id],
-                id=f'morning_msg_{user_id}_{today}',
+                id=f'morning_msg_{user_id}',
                 replace_existing=True
             )
 
