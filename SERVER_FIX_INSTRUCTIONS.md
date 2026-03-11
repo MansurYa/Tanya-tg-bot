@@ -66,6 +66,16 @@ chmod +x deploy_fix.sh
 
 ## Troubleshooting
 
+### Если появляется ошибка "Conflict: terminated by other getUpdates request"
+Это означает, что запущено несколько экземпляров бота. См. подробную инструкцию: **FIX_CONFLICT.md**
+
+Быстрое решение:
+```bash
+./stop_bot.sh    # Остановить все экземпляры
+./start_bot.sh   # Запустить один экземпляр
+./check_bot.sh   # Проверить статус
+```
+
 ### Если датасеты не загружаются
 ```bash
 # Проверить наличие файлов
