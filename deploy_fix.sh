@@ -21,28 +21,31 @@ python fix_duplicate_notifications.py
 # 3. Restart bot
 echo ""
 echo "Step 3: Restarting bot..."
-echo "Stopping bot..."
-pkill -f "python -m src.bot" || echo "Bot was not running"
+
+# Use the safe stop script
+chmod +x stop_bot.sh start_bot.sh check_bot.sh
+./stop_bot.sh
+
+if [ $? -ne 0 ]; then
+    echo "⚠️  Warning: Failed to stop all instances"
+fi
 
 sleep 2
 
-echo "Starting bot..."
-nohup python -m src.bot > bot.log 2>&1 &
+# Start bot
+./start_bot.sh
 
-sleep 2
-
-# 4. Verify bot is running
-if pgrep -f "python -m src.bot" > /dev/null; then
+if [ $? -eq 0 ]; then
     echo ""
     echo "=========================================="
     echo "✅ Deployment successful!"
-    echo "Bot is running with PID: $(pgrep -f 'python -m src.bot')"
+    ./check_bot.sh
     echo "=========================================="
 else
     echo ""
     echo "=========================================="
-    echo "❌ Warning: Bot may not be running"
-    echo "Check bot.log for errors"
+    echo "❌ Deployment failed"
+    echo "Check bot.log for errors: tail bot.log"
     echo "=========================================="
     exit 1
 fi
