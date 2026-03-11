@@ -6,6 +6,7 @@ __pycache__/
 # Data
 *.csv
 *.db
+*.db.backup_*
 *.txt
 *.ipynb
 
