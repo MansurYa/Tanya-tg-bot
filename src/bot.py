@@ -446,9 +446,9 @@ async def activate_morning_messages(update: Update, user_id: int):
         logger.error("Cannot activate morning messages: pools not loaded")
         return
 
-    # Enable morning messages
-    update_user(user_id, morning_messages_enabled=1)
-    logger.info(f"Morning messages activated for user {user_id}")
+    # Enable morning messages and disable old notification system
+    update_user(user_id, morning_messages_enabled=1, notifications_enabled=0)
+    logger.info(f"Morning messages activated for user {user_id} (old notifications disabled)")
 
     # Send first message immediately
     await send_morning_message(update.get_bot(), user_id, is_first=True)
