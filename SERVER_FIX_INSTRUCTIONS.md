@@ -11,24 +11,45 @@ cd /path/to/Tanya-tg-bot
 git pull  # или загрузить файлы вручную
 ```
 
-### 2. Исправить базу данных на сервере
+### 2. Проверить датасеты (опционально, но рекомендуется)
+```bash
+# Проверить, что датасеты загружены правильно
+python verify_datasets.py
+```
+
+Скрипт проверит:
+- Наличие файлов `compliments_final.json` и `psychology_final.json`
+- Корректность JSON структуры
+- Возможность загрузки message pools
+- Покажет пример комбинированного сообщения
+
+### 3. Исправить базу данных на сервере
 ```bash
 # Запустить скрипт исправления
 python fix_duplicate_notifications.py
 ```
 
 Скрипт автоматически:
+- Создаст backup базы данных
 - Найдет пользователей с `morning_messages_enabled=1` AND `notifications_enabled=1`
 - Установит `notifications_enabled=0` для них
 - Покажет количество исправленных пользователей
 
-### 3. Перезапустить бота
+### 4. Перезапустить бота
 ```bash
 # Остановить текущий процесс
 pkill -f "python -m src.bot"
 
 # Запустить заново
-python -m src.bot
+nohup python -m src.bot > bot.log 2>&1 &
+```
+
+## Быстрый способ (автоматический)
+```bash
+cd /path/to/Tanya-tg-bot
+git pull origin main
+chmod +x deploy_fix.sh
+./deploy_fix.sh
 ```
 
 ## Проверка
@@ -42,3 +63,23 @@ python -m src.bot
 ```
 
 Старые простые сообщения ("Привет, сладкая. Как спалось? 🌙") больше не будут отправляться.
+
+## Troubleshooting
+
+### Если датасеты не загружаются
+```bash
+# Проверить наличие файлов
+ls -lh tanya_dataset_generator/output_v2/*.json
+
+# Проверить права доступа
+chmod 644 tanya_dataset_generator/output_v2/*.json
+```
+
+### Если бот не запускается
+```bash
+# Проверить логи
+tail -f bot.log
+
+# Проверить процессы
+ps aux | grep python
+```
