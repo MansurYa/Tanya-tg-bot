@@ -3,8 +3,11 @@ import logging
 import os
 import random
 import numpy as np
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone as dt_timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+# Moscow timezone
+moscow_tz = dt_timezone(timedelta(hours=3))
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from openai import AsyncOpenAI
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -470,6 +473,12 @@ async def send_morning_message(bot, user_id: int, is_first: bool = False):
 
             user = dict(row)
 
+            # Дублирующая проверка: не отправлено ли уже сегодня
+            today = datetime.now(moscow_tz).date().isoformat()
+            if user.get('last_morning_message_date') == today:
+                logger.debug(f"Skipping user {user_id} - already sent today")
+                return
+
             # Get shown IDs from database
             emotional_shown = json.loads(user.get('emotional_pool_shown_ids', '[]'))
             psychological_shown = json.loads(user.get('psychological_pool_shown_ids', '[]'))
@@ -615,11 +624,12 @@ def generate_morning_time() -> datetime:
     hours = int(total_minutes // 60)
     minutes = int(total_minutes % 60)
 
-    # Create datetime for tomorrow
-    tomorrow = date.today() + timedelta(days=1)
-    send_time = datetime.combine(tomorrow, time(hour=hours, minute=minutes))
+    # Create datetime for today with Moscow timezone
+    today = date.today()
+    send_time = datetime.combine(today, time(hour=hours, minute=minutes))
+    send_time = send_time.replace(tzinfo=moscow_tz)
 
-    logger.debug(f"Generated morning time: {send_time.strftime('%H:%M')}")
+    logger.debug(f"Generated morning time: {send_time.strftime('%H:%M')} MSK")
 
     return send_time
 
@@ -634,7 +644,8 @@ async def schedule_morning_messages(bot):
                 WHERE morning_messages_enabled = 1
             """).fetchall()
 
-        today = date.today().isoformat()
+        today = datetime.now(moscow_tz).date().isoformat()
+        now_moscow = datetime.now(moscow_tz)
         scheduled_count = 0
 
         for row in rows:
@@ -647,6 +658,12 @@ async def schedule_morning_messages(bot):
 
             # Generate time
             send_time = generate_morning_time()
+
+            # Если время уже прошло сегодня — отправить немедленно
+            if send_time < now_moscow:
+                logger.info(f"Morning time {send_time.strftime('%H:%M')} has passed, sending immediately to user {user_id}")
+                await send_morning_message(bot, user_id)
+                continue
 
             # Schedule job
             scheduler.add_job(
