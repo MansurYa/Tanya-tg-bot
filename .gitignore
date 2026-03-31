@@ -7,7 +7,6 @@ __pycache__/
 *.csv
 *.db
 *.db.backup_*
-*.txt
 *.ipynb
 
 # Config
@@ -19,7 +18,7 @@ config.json
 .idea/
 .vscode/
 
-# API keys and credentials
+# API keys and cзdentials
 *api_key*
 *token*
 *secret*
