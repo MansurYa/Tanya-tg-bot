@@ -15,6 +15,10 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# Базовая директория проекта (относительно этого файла)
+BASE_DIR = Path(__file__).resolve().parent.parent
+DATASETS_DIR = BASE_DIR / "tanya_dataset_generator" / "output_v2"
+
 
 class MessagePool:
     """Manages message rotation with full-cycle logic."""
@@ -43,6 +47,11 @@ class MessagePool:
         Returns:
             Tuple of (selected_message, updated_shown_ids)
         """
+        # Validate shown_ids type
+        if not isinstance(shown_ids, list):
+            logger.warning(f"Invalid shown_ids type ({type(shown_ids).__name__}), resetting to empty list")
+            shown_ids = []
+
         # Calculate available messages
         all_ids = [msg["id"] for msg in self.all_messages]
         available_ids = [id for id in all_ids if id not in shown_ids]
@@ -60,24 +69,52 @@ class MessagePool:
         # Update shown list
         new_shown_ids = shown_ids + [selected_id]
 
-        logger.debug(f"Selected {selected_id} from {self.pool_name} ({len(new_shown_ids)}/{self.total_count} shown)")
+        logger.info(f"Selected {selected_id} from {self.pool_name} ({len(new_shown_ids)}/{self.total_count} shown)")
 
         return selected_message, new_shown_ids
 
 
 def load_compliments() -> List[Dict]:
     """Load compliments dataset."""
-    path = Path("tanya_dataset_generator/output_v2/compliments_final.json")
+    path = DATASETS_DIR / "compliments_final.json"
     with open(path, 'r', encoding='utf-8') as f:
         data = json.load(f)
+
+        # Validate structure
+        if not isinstance(data, dict):
+            raise ValueError("compliments_final.json: expected object at root")
+        if "compliments" not in data:
+            raise ValueError("compliments_final.json: missing 'compliments' key")
+        if not isinstance(data["compliments"], list):
+            raise ValueError("compliments_final.json: 'compliments' must be array")
+
+        # Validate each message has required fields
+        for i, msg in enumerate(data["compliments"]):
+            if not isinstance(msg, dict) or "id" not in msg or "text" not in msg:
+                raise ValueError(f"compliments_final.json: message[{i}] missing 'id' or 'text'")
+
         return data.get("compliments", [])
 
 
 def load_psychology() -> List[Dict]:
     """Load psychology messages dataset."""
-    path = Path("tanya_dataset_generator/output_v2/psychology_final.json")
+    path = DATASETS_DIR / "psychology_final.json"
     with open(path, 'r', encoding='utf-8') as f:
         data = json.load(f)
+
+        # Validate structure
+        if not isinstance(data, dict):
+            raise ValueError("psychology_final.json: expected object at root")
+        if "quotes" not in data:
+            raise ValueError("psychology_final.json: missing 'quotes' key")
+        if not isinstance(data["quotes"], list):
+            raise ValueError("psychology_final.json: 'quotes' must be array")
+
+        # Validate each message has required fields
+        for i, msg in enumerate(data["quotes"]):
+            if not isinstance(msg, dict) or "id" not in msg or "text" not in msg:
+                raise ValueError(f"psychology_final.json: message[{i}] missing 'id' or 'text'")
+
         return data.get("quotes", [])
 
 

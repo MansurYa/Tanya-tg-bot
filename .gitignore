@@ -28,6 +28,7 @@ config.json
 .DS_Store
 
 # chat and analysis files (preserved locally)
+.claude
 chat_history.txt
 mansur_wakeup_times.csv
 tanya_wakeup_times.csv

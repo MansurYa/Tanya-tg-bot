@@ -8,6 +8,14 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 # Moscow timezone
 moscow_tz = dt_timezone(timedelta(hours=3))
+
+# Morning message time settings (normal distribution)
+# Source: derived from user behavior analysis
+MORNING_MESSAGE_MEAN_MINUTES = 8 * 60 + 45  # 08:45 MSK (525 min from midnight)
+MORNING_MESSAGE_STD_MINUTES = 67.18
+MORNING_MESSAGE_MIN_MINUTES = 7.5 * 60      # 07:30 (clamped)
+MORNING_MESSAGE_MAX_MINUTES = 12 * 60       # 12:00 (clamped)
+
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from openai import AsyncOpenAI
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -21,7 +29,7 @@ from telegram.ext import (
     filters,
 )
 from . import database
-from .database import create_user, get_user, get_users_for_notification, update_user
+from .database import create_user, get_user, update_user
 from .message_pool import MessagePool, load_compliments, load_psychology, format_combined_message
 
 if TYPE_CHECKING:
@@ -457,75 +465,99 @@ async def activate_morning_messages(update: Update, user_id: int):
     await send_morning_message(update.get_bot(), user_id, is_first=True)
 
 
-async def send_morning_message(bot, user_id: int, is_first: bool = False):
-    """Send morning message to user."""
+async def _send_combined_message(
+    bot,
+    user_id: int,
+    update_last_message_date: bool = False
+) -> bool:
+    """
+    Send combined morning message to user.
+
+    Args:
+        bot: Telegram bot instance
+        user_id: User's Telegram ID
+        update_last_message_date: If True, update last_morning_message_date to today
+
+    Returns:
+        True if message sent successfully, False otherwise
+    """
+    if not emotional_pool or not psychological_pool:
+        logger.error(f"Message pools not loaded for user {user_id}")
+        return False
+
     try:
-        # ATOMIC OPERATION: Read-select-write with database lock
         with database.get_db() as conn:
-            # Lock the row for this user (prevents concurrent modifications)
             row = conn.execute(
                 "SELECT * FROM users WHERE telegram_id = ? AND morning_messages_enabled = 1",
                 (user_id,)
             ).fetchone()
 
             if not row:
-                return
+                return False
 
             user = dict(row)
-
-            # Дублирующая проверка: не отправлено ли уже сегодня
             today = datetime.now(moscow_tz).date().isoformat()
-            if user.get('last_morning_message_date') == today:
-                logger.debug(f"Skipping user {user_id} - already sent today")
-                return
 
-            # Get shown IDs from database
+            # Check if already sent today (only for scheduled messages)
+            if update_last_message_date and user.get('last_morning_message_date') == today:
+                logger.info(f"Skipping user {user_id} - already sent today")
+                return False
+
+            # Get shown IDs
             emotional_shown = json.loads(user.get('emotional_pool_shown_ids', '[]'))
             psychological_shown = json.loads(user.get('psychological_pool_shown_ids', '[]'))
 
-            # Get next messages
+            # Get next messages from pools
             emotional_msg, new_emotional_shown = emotional_pool.get_next(emotional_shown)
             psychological_msg, new_psychological_shown = psychological_pool.get_next(psychological_shown)
 
-            # Update database BEFORE sending (ensures atomicity)
-            today = date.today().isoformat()
-            conn.execute(
-                """UPDATE users
-                   SET emotional_pool_shown_ids = ?,
-                       psychological_pool_shown_ids = ?,
-                       last_morning_message_date = ?,
-                       next_morning_message_time = NULL
-                   WHERE telegram_id = ?""",
-                (json.dumps(new_emotional_shown),
-                 json.dumps(new_psychological_shown),
-                 today,
-                 user_id)
-            )
+            # Update database
+            if update_last_message_date:
+                conn.execute(
+                    """UPDATE users
+                       SET emotional_pool_shown_ids = ?,
+                           psychological_pool_shown_ids = ?,
+                           last_morning_message_date = ?,
+                           next_morning_message_time = NULL
+                       WHERE telegram_id = ?""",
+                    (json.dumps(new_emotional_shown),
+                     json.dumps(new_psychological_shown),
+                     today,
+                     user_id)
+                )
+            else:
+                conn.execute(
+                    """UPDATE users
+                       SET emotional_pool_shown_ids = ?,
+                           psychological_pool_shown_ids = ?
+                       WHERE telegram_id = ?""",
+                    (json.dumps(new_emotional_shown),
+                     json.dumps(new_psychological_shown),
+                     user_id)
+                )
+                conn.commit()
+
             conn.commit()
 
-        # Format combined message
-        combined_text = format_combined_message(
-            emotional_msg["text"],
-            psychological_msg["text"]
-        )
-
-        # Create keyboard with "Another message" button
+        # Format and send message
+        combined_text = format_combined_message(emotional_msg["text"], psychological_msg["text"])
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("Ещё одно сообщение", callback_data="another_message")]
         ])
 
-        # Send message (outside transaction to avoid blocking)
-        await bot.send_message(
-            chat_id=user_id,
-            text=combined_text,
-            reply_markup=keyboard
-        )
+        await bot.send_message(chat_id=user_id, text=combined_text, reply_markup=keyboard)
 
-        logger.info(f"Morning message sent to user {user_id} (emotional: {len(new_emotional_shown)}/{emotional_pool.total_count}, psych: {len(new_psychological_shown)}/{psychological_pool.total_count})")
+        pool_info = f"(emotional: {len(new_emotional_shown)}/{emotional_pool.total_count}, psych: {len(new_psychological_shown)}/{psychological_pool.total_count})"
+        if update_last_message_date:
+            logger.info(f"Morning message sent to user {user_id} {pool_info}")
+        else:
+            logger.info(f"Additional message sent to user {user_id} {pool_info}")
+
+        return True
 
     except Exception as e:
-        logger.error(f"Failed to send morning message to {user_id}: {e}", exc_info=True)
-        # Try to send fallback message
+        logger.error(f"Failed to send combined message to {user_id}: {e}", exc_info=True)
+        # Try fallback message
         try:
             await bot.send_message(
                 chat_id=user_id,
@@ -533,84 +565,34 @@ async def send_morning_message(bot, user_id: int, is_first: bool = False):
             )
         except:
             logger.critical(f"Cannot reach user {user_id} at all")
+        return False
+
+
+async def send_morning_message(bot, user_id: int, is_first: bool = False):
+    """Send morning message to user."""
+    await _send_combined_message(bot, user_id, update_last_message_date=True)
 
 
 async def handle_another_message(update: Update, context: CallbackContext):
     """Handle 'Another message' button click."""
     query = update.callback_query
     await query.answer()
-
     user_id = query.from_user.id
 
     if not emotional_pool or not psychological_pool:
         await query.answer("Сообщения временно недоступны", show_alert=True)
         return
 
-    try:
-        # ATOMIC OPERATION: Read-select-write with database lock
-        with database.get_db() as conn:
-            row = conn.execute(
-                "SELECT * FROM users WHERE telegram_id = ? AND morning_messages_enabled = 1",
-                (user_id,)
-            ).fetchone()
+    success = await _send_combined_message(bot=context.bot, user_id=user_id, update_last_message_date=False)
 
-            if not row:
-                await query.answer("Сначала завершите квест!", show_alert=True)
-                return
-
-            user = dict(row)
-
-            # Get shown IDs
-            emotional_shown = json.loads(user.get('emotional_pool_shown_ids', '[]'))
-            psychological_shown = json.loads(user.get('psychological_pool_shown_ids', '[]'))
-
-            # Get next messages
-            emotional_msg, new_emotional_shown = emotional_pool.get_next(emotional_shown)
-            psychological_msg, new_psychological_shown = psychological_pool.get_next(psychological_shown)
-
-            # Update database BEFORE sending
-            conn.execute(
-                """UPDATE users
-                   SET emotional_pool_shown_ids = ?,
-                       psychological_pool_shown_ids = ?
-                   WHERE telegram_id = ?""",
-                (json.dumps(new_emotional_shown),
-                 json.dumps(new_psychological_shown),
-                 user_id)
-            )
-            conn.commit()
-
-        # Format message
-        combined_text = format_combined_message(
-            emotional_msg["text"],
-            psychological_msg["text"]
-        )
-
-        # Create keyboard
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("Ещё одно сообщение", callback_data="another_message")]
-        ])
-
-        # Send new message (not edit, send new)
-        await context.bot.send_message(
-            chat_id=user_id,
-            text=combined_text,
-            reply_markup=keyboard
-        )
-
-        logger.info(f"Another message sent to user {user_id}")
-
-    except Exception as e:
-        logger.error(f"Failed to send another message to {user_id}: {e}")
-        await query.answer("Произошла ошибка", show_alert=True)
+    if not success:
+        await query.answer("Не удалось отправить сообщение", show_alert=True)
 
 
 def generate_morning_time() -> datetime:
     """Generate random morning message time with normal distribution."""
-    # Mean: 08:45 Moscow time
-    # Std: 67.18 minutes
-    mean_minutes = 8 * 60 + 45  # 525 minutes from midnight
-    std_minutes = 67.18
+    mean_minutes = MORNING_MESSAGE_MEAN_MINUTES
+    std_minutes = MORNING_MESSAGE_STD_MINUTES
 
     # Generate random offset
     offset_minutes = np.random.normal(0, std_minutes)
@@ -619,7 +601,7 @@ def generate_morning_time() -> datetime:
     total_minutes = mean_minutes + offset_minutes
 
     # Clamp to reasonable range (7:30 - 12:00)
-    total_minutes = max(7.5 * 60, min(12 * 60, total_minutes))
+    total_minutes = max(MORNING_MESSAGE_MIN_MINUTES, min(MORNING_MESSAGE_MAX_MINUTES, total_minutes))
 
     hours = int(total_minutes // 60)
     minutes = int(total_minutes % 60)
@@ -629,7 +611,7 @@ def generate_morning_time() -> datetime:
     send_time = datetime.combine(today, time(hour=hours, minute=minutes))
     send_time = send_time.replace(tzinfo=moscow_tz)
 
-    logger.debug(f"Generated morning time: {send_time.strftime('%H:%M')} MSK")
+    logger.info(f"Generated morning time: {send_time.strftime('%H:%M')} MSK")
 
     return send_time
 
@@ -687,69 +669,8 @@ async def schedule_morning_messages(bot):
         logger.error(f"Failed to schedule morning messages: {e}", exc_info=True)
 
 
-def get_random_morning_time() -> time:
-    """Генерирует случайное время для утреннего уведомления."""
-    mean_minutes = 11 * 60
-    std_minutes = 90
-
-    random_minutes = random.gauss(mean_minutes, std_minutes)
-    random_minutes = max(8 * 60, min(14 * 60, random_minutes))
-
-    hours = int(random_minutes // 60)
-    minutes = int(random_minutes % 60)
-
-    return time(hour=hours, minute=minutes)
-
-
-async def send_single_notification(bot, telegram_id: int):
-    """Отправляет одно утреннее уведомление пользователю."""
-    messages = CONFIG.get("notifications", {}).get("morning_messages", [
-        "Доброе утро, моя хорошая ☀️",
-        "Привет, сладкая. Как спалось? 🌙",
-        "Проснулась? Я уже думаю о тебе 💭",
-    ])
-
-    try:
-        await bot.send_message(telegram_id, random.choice(messages))
-        update_user(telegram_id, last_notification_date=date.today().isoformat())
-        logger.info(f"Утреннее уведомление отправлено пользователю {telegram_id}")
-    except Exception as e:
-        logger.error(f"Не удалось отправить уведомление {telegram_id}: {e}")
-
-
-async def schedule_daily_notifications(bot):
-    """Планирует ежедневную отправку уведомлений всем подходящим пользователям."""
-    today_str = date.today().isoformat()
-    users = get_users_for_notification()
-
-    for user in users:
-        user_id = user['telegram_id']
-        if user.get('last_notification_date') != today_str:
-            send_time = get_random_morning_time()
-            run_date = datetime.combine(date.today(), send_time)
-
-            scheduler.add_job(
-                send_single_notification,
-                'date',
-                run_date=run_date,
-                args=[bot, user_id],
-                id=f"notif_{user_id}_{today_str}",
-                replace_existing=True
-            )
-            logger.info(f"Запланировано уведомление для {user_id} на {run_date.strftime('%H:%M:%S')}")
-
-
 async def setup_scheduler(app: Application):
     """Настраивает и запускает планировщик задач."""
-    # Daily notifications (old system)
-    scheduler.add_job(
-        schedule_daily_notifications,
-        'cron',
-        hour=4,
-        minute=0,
-        args=[app.bot]
-    )
-
     # Morning messages scheduling (new system)
     scheduler.add_job(
         schedule_morning_messages,
@@ -760,7 +681,7 @@ async def setup_scheduler(app: Application):
     )
 
     scheduler.start()
-    logger.info("Планировщик запущен (notifications + morning messages).")
+    logger.info("Планировщик запущен.")
 
     # Reschedule pending messages on startup
     await schedule_morning_messages(app.bot)
